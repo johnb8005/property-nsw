@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NSW Property Sales Explorer</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    html, body, #root {
+      height: 100%;
+      width: 100%;
+    }
+    /* Range slider thumb styling */
+    .range-thumb {
+      pointer-events: auto !important;
+    }
+    .range-thumb::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 16px;
+      height: 16px;
+      background: #3b82f6;
+      border-radius: 50%;
+      cursor: pointer;
+      pointer-events: auto;
+      border: 2px solid #1e293b;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+    }
+    .range-thumb::-webkit-slider-thumb:hover {
+      background: #60a5fa;
+      transform: scale(1.1);
+    }
+    .range-thumb::-moz-range-thumb {
+      width: 16px;
+      height: 16px;
+      background: #3b82f6;
+      border-radius: 50%;
+      cursor: pointer;
+      pointer-events: auto;
+      border: 2px solid #1e293b;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+    }
+    .range-thumb::-moz-range-thumb:hover {
+      background: #60a5fa;
+    }
+
+    /* Mobile responsive styles */
+    @media (max-width: 768px) {
+      .desktop-only {
+        display: none !important;
+      }
+      .mobile-stack {
+        flex-direction: column !important;
+      }
+      .mobile-full-width {
+        width: 100% !important;
+        flex: none !important;
+      }
+      .mobile-sidebar {
+        width: 100% !important;
+        max-height: 300px !important;
+        border-right: none !important;
+        border-bottom: 1px solid #1e293b !important;
+      }
+      .mobile-padding {
+        padding: 8px !important;
+      }
+      .mobile-text-sm {
+        font-size: 11px !important;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .mobile-hide {
+        display: none !important;
+      }
+    }
+
+    @media (min-width: 769px) {
+      .desktop-hide {
+        display: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="./frontend.tsx"></script>
+</body>
+</html>
