@@ -195,8 +195,10 @@ function getSuburbCoords(suburb: string, postcode: string): { lat: number; lng: 
   };
 }
 
+const PORT = process.env.PORT || 3003;
+
 Bun.serve({
-  port: 3003,
+  port: PORT,
   hostname: "0.0.0.0",
   routes: {
     "/": index,
@@ -310,4 +312,4 @@ Bun.serve({
   },
 });
 
-console.log("Server running at http://localhost:3003");
+console.log(`Server running at http://localhost:${PORT}`);

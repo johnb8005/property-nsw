@@ -34,6 +34,7 @@ interface SuburbStats {
   max_price: number;
   avg_price_per_sqm: number | null;
   growth_1yr: number;
+  momentum_score: number | null;
   coords?: { lat: number; lng: number };
 }
 
@@ -89,6 +90,37 @@ function getGrowthColor(growth: number) {
   return "#ef4444";
 }
 
+function getMomentumColor(score: number | null) {
+  if (score === null) return "#64748b";
+  if (score >= 80) return "#22c55e";
+  if (score >= 60) return "#84cc16";
+  if (score >= 40) return "#eab308";
+  if (score >= 20) return "#f97316";
+  return "#ef4444";
+}
+
+function exportToCSV(suburbs: SuburbStats[], filename: string) {
+  const headers = ['Suburb', 'Postcode', 'Median Price', 'Growth 1yr %', 'Sales Count', '$/m²', 'Momentum', 'Total Value'];
+  const rows = suburbs.map(s => [
+    s.suburb,
+    s.postcode,
+    s.median_price,
+    s.growth_1yr.toFixed(1),
+    s.sales_count,
+    s.avg_price_per_sqm || '',
+    s.momentum_score || '',
+    s.total_value,
+  ]);
+  const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 function MapController({ center, zoom }: { center: [number, number]; zoom: number }) {
   const map = useMap();
   useEffect(() => {
@@ -142,6 +174,7 @@ function MapPage({ onSuburbClick }: { onSuburbClick: (suburb: string, postcode: 
   const [maxPrice, setMaxPrice] = useState(10000000);
   const [searchText, setSearchText] = useState("");
   const [mapMode, setMapMode] = useState<"sales" | "suburbs">("suburbs");
+  const [colorBy, setColorBy] = useState<"price" | "growth" | "momentum">("price");
 
   useEffect(() => {
     Promise.all([
@@ -197,6 +230,31 @@ function MapPage({ onSuburbClick }: { onSuburbClick: (suburb: string, postcode: 
     return [lat / valid.length, lng / valid.length];
   }, [filteredSales, suburbs, mapMode]);
 
+  // Get color for a suburb based on selected metric
+  const getSuburbColor = (suburb: SuburbStats) => {
+    if (colorBy === "price") {
+      if (!suburb.avg_price_per_sqm) return "#64748b";
+      return getPriceColor(suburb.avg_price_per_sqm, suburbSqmRange.min, suburbSqmRange.max);
+    } else if (colorBy === "growth") {
+      if (suburb.sales_count < 10) return "#64748b";
+      return getGrowthColor(suburb.growth_1yr);
+    } else {
+      // momentum
+      return getMomentumColor(suburb.momentum_score);
+    }
+  };
+
+  // Get the primary value to display for a suburb
+  const getSuburbValue = (suburb: SuburbStats) => {
+    if (colorBy === "price") {
+      return suburb.avg_price_per_sqm ? `$${suburb.avg_price_per_sqm.toLocaleString()}/m²` : "-";
+    } else if (colorBy === "growth") {
+      return `${suburb.growth_1yr > 0 ? "+" : ""}${suburb.growth_1yr.toFixed(1)}%`;
+    } else {
+      return suburb.momentum_score !== null ? `${suburb.momentum_score}` : "-";
+    }
+  };
+
   const suburbSqmRange = useMemo(() => {
     let min = Infinity, max = -Infinity;
     for (const s of suburbs) {
@@ -223,7 +281,7 @@ function MapPage({ onSuburbClick }: { onSuburbClick: (suburb: string, postcode: 
         overflowY: "auto",
       }}>
         <div>
-          <div style={{ fontSize: "11px", color: "#64748b", textTransform: "uppercase", marginBottom: "8px" }}>View Mode</div>
+          <div style={{ fontSize: "11px", color: "#64748b", textTransform: "uppercase", marginBottom: "8px" }}>View</div>
           <div style={{ display: "flex", gap: "4px", background: "#0f172a", padding: "4px", borderRadius: "6px" }}>
             {(["suburbs", "sales"] as const).map((mode) => (
               <button
@@ -247,6 +305,30 @@ function MapPage({ onSuburbClick }: { onSuburbClick: (suburb: string, postcode: 
             ))}
           </div>
         </div>
+
+        {mapMode === "suburbs" && (
+          <div>
+            <div style={{ fontSize: "11px", color: "#64748b", textTransform: "uppercase", marginBottom: "8px" }}>Color by</div>
+            <select
+              value={colorBy}
+              onChange={(e) => setColorBy(e.target.value as any)}
+              style={{
+                width: "100%",
+                padding: "10px",
+                background: "#1e293b",
+                border: "1px solid #334155",
+                borderRadius: "6px",
+                color: "#e2e8f0",
+                fontSize: "13px",
+                cursor: "pointer",
+              }}
+            >
+              <option value="price">$/m² (Price per sqm)</option>
+              <option value="growth">YoY Growth %</option>
+              <option value="momentum">Momentum Score</option>
+            </select>
+          </div>
+        )}
 
         {mapMode === "sales" && (
           <>
@@ -298,23 +380,49 @@ function MapPage({ onSuburbClick }: { onSuburbClick: (suburb: string, postcode: 
             <div style={{ fontSize: "24px", fontWeight: "700", color: "#f8fafc" }}>
               {suburbs.length.toLocaleString()}
             </div>
-            <div style={{ fontSize: "11px", color: "#64748b" }}>suburbs with stats</div>
+            <div style={{ fontSize: "11px", color: "#64748b" }}>suburbs</div>
           </div>
         )}
 
-        <div>
-          <div style={{ fontSize: "11px", color: "#64748b", textTransform: "uppercase", marginBottom: "8px" }}>
-            Legend ($/m²)
+        {mapMode === "suburbs" && (
+          <div>
+            <div style={{ fontSize: "11px", color: "#64748b", textTransform: "uppercase", marginBottom: "8px" }}>
+              Legend
+            </div>
+            {colorBy === "price" && (
+              <div style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "10px" }}>
+                <span style={{ width: "12px", height: "12px", borderRadius: "50%", background: "#22c55e" }} />
+                <span style={{ color: "#64748b", flex: 1 }}>Cheap</span>
+                <span style={{ width: "12px", height: "12px", borderRadius: "50%", background: "#eab308" }} />
+                <span style={{ width: "12px", height: "12px", borderRadius: "50%", background: "#f97316" }} />
+                <span style={{ width: "12px", height: "12px", borderRadius: "50%", background: "#ef4444" }} />
+                <span style={{ color: "#64748b" }}>Expensive</span>
+              </div>
+            )}
+            {colorBy === "growth" && (
+              <div style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "10px" }}>
+                <span style={{ width: "12px", height: "12px", borderRadius: "50%", background: "#ef4444" }} />
+                <span style={{ color: "#64748b", flex: 1 }}>&lt;-5%</span>
+                <span style={{ width: "12px", height: "12px", borderRadius: "50%", background: "#f97316" }} />
+                <span style={{ width: "12px", height: "12px", borderRadius: "50%", background: "#eab308" }} />
+                <span style={{ width: "12px", height: "12px", borderRadius: "50%", background: "#84cc16" }} />
+                <span style={{ width: "12px", height: "12px", borderRadius: "50%", background: "#22c55e" }} />
+                <span style={{ color: "#64748b" }}>&gt;10%</span>
+              </div>
+            )}
+            {colorBy === "momentum" && (
+              <div style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "10px" }}>
+                <span style={{ width: "12px", height: "12px", borderRadius: "50%", background: "#ef4444" }} />
+                <span style={{ color: "#64748b", flex: 1 }}>0</span>
+                <span style={{ width: "12px", height: "12px", borderRadius: "50%", background: "#f97316" }} />
+                <span style={{ width: "12px", height: "12px", borderRadius: "50%", background: "#eab308" }} />
+                <span style={{ width: "12px", height: "12px", borderRadius: "50%", background: "#84cc16" }} />
+                <span style={{ width: "12px", height: "12px", borderRadius: "50%", background: "#22c55e" }} />
+                <span style={{ color: "#64748b" }}>100</span>
+              </div>
+            )}
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "10px" }}>
-            <span style={{ width: "12px", height: "12px", borderRadius: "50%", background: "#22c55e" }} />
-            <span style={{ color: "#64748b", flex: 1 }}>Low</span>
-            <span style={{ width: "12px", height: "12px", borderRadius: "50%", background: "#eab308" }} />
-            <span style={{ width: "12px", height: "12px", borderRadius: "50%", background: "#f97316" }} />
-            <span style={{ width: "12px", height: "12px", borderRadius: "50%", background: "#ef4444" }} />
-            <span style={{ color: "#64748b" }}>High</span>
-          </div>
-        </div>
+        )}
       </aside>
 
       <div style={{ flex: 1, position: "relative" }}>
@@ -328,43 +436,58 @@ function MapPage({ onSuburbClick }: { onSuburbClick: (suburb: string, postcode: 
             url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
           />
           <MapController center={mapCenter} zoom={10} />
-          {mapMode === "suburbs" && suburbs.map((suburb) =>
-            suburb.coords ? (
+          {mapMode === "suburbs" && suburbs.map((suburb) => {
+            if (!suburb.coords) return null;
+            const color = getSuburbColor(suburb);
+            const value = getSuburbValue(suburb);
+
+            return (
               <CircleMarker
                 key={`${suburb.suburb}-${suburb.postcode}`}
                 center={[suburb.coords.lat, suburb.coords.lng]}
-                radius={Math.min(15, Math.max(8, Math.sqrt(suburb.sales_count) * 2))}
+                radius={Math.min(14, Math.max(8, Math.sqrt(suburb.sales_count) * 1.5))}
                 pathOptions={{
-                  fillColor: suburb.avg_price_per_sqm
-                    ? getPriceColor(suburb.avg_price_per_sqm, suburbSqmRange.min, suburbSqmRange.max)
-                    : "#64748b",
-                  fillOpacity: 0.8,
-                  color: "#1e293b",
+                  fillColor: color,
+                  fillOpacity: 0.85,
+                  color: "#000",
                   weight: 1,
-                }}
-                eventHandlers={{
-                  click: () => onSuburbClick(suburb.suburb, suburb.postcode),
                 }}
               >
                 <Popup>
                   <div style={{ fontFamily: "monospace", fontSize: "12px", minWidth: "220px" }}>
                     <div style={{ fontWeight: "700", marginBottom: "4px" }}>{suburb.suburb}</div>
                     <div style={{ color: "#666", marginBottom: "8px" }}>{suburb.postcode}</div>
-                    <div style={{ fontSize: "18px", fontWeight: "700", color: "#3b82f6" }}>{formatPrice(suburb.median_price)}</div>
+                    <div style={{ fontSize: "18px", fontWeight: "700", color }}>{value}</div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px", fontSize: "11px", marginTop: "8px" }}>
                       <div>Sales: {suburb.sales_count}</div>
+                      <div>Median: {formatPrice(suburb.median_price)}</div>
                       <div>$/m²: {suburb.avg_price_per_sqm ? `$${suburb.avg_price_per_sqm.toLocaleString()}` : "-"}</div>
                       <div style={{ color: getGrowthColor(suburb.growth_1yr) }}>
                         Growth: {suburb.growth_1yr > 0 ? "+" : ""}{suburb.growth_1yr.toFixed(1)}%
                       </div>
-                      <div>Total: {formatPrice(suburb.total_value)}</div>
                     </div>
-                    <div style={{ marginTop: "8px", fontSize: "10px", color: "#888" }}>Click to view details</div>
+                    <button
+                      onClick={() => onSuburbClick(suburb.suburb, suburb.postcode)}
+                      style={{
+                        marginTop: "10px",
+                        width: "100%",
+                        padding: "8px",
+                        background: "#3b82f6",
+                        border: "none",
+                        borderRadius: "4px",
+                        color: "#fff",
+                        cursor: "pointer",
+                        fontSize: "12px",
+                        fontWeight: "500",
+                      }}
+                    >
+                      View Details
+                    </button>
                   </div>
                 </Popup>
               </CircleMarker>
-            ) : null
-          )}
+            );
+          })}
           {mapMode === "sales" && filteredSales.slice(0, 5000).map((sale) =>
             sale.coords ? (
               <CircleMarker
@@ -412,17 +535,27 @@ function MapPage({ onSuburbClick }: { onSuburbClick: (suburb: string, postcode: 
 }
 
 // Rankings Page
-function RankingsPage({ onSuburbClick }: { onSuburbClick: (suburb: string, postcode: string) => void }) {
+function RankingsPage({
+  onSuburbClick,
+  onCompare,
+  selectedForCompare,
+  onToggleCompare,
+}: {
+  onSuburbClick: (suburb: string, postcode: string) => void;
+  onCompare: () => void;
+  selectedForCompare: Set<string>;
+  onToggleCompare: (key: string) => void;
+}) {
   const [suburbs, setSuburbs] = useState<SuburbStats[]>([]);
   const [loading, setLoading] = useState(true);
-  const [sortBy, setSortBy] = useState("median_price");
+  const [sortBy, setSortBy] = useState("momentum_score");
   const [sortOrder, setSortOrder] = useState<"ASC" | "DESC">("DESC");
   const [searchText, setSearchText] = useState("");
   const [minSales, setMinSales] = useState(10);
 
   useEffect(() => {
     setLoading(true);
-    fetch(`/api/suburbs?sortBy=${sortBy}&order=${sortOrder}&limit=1000`)
+    fetch(`/api/suburbs?sortBy=${sortBy}&order=${sortOrder}&limit=2000`)
       .then((r) => r.json())
       .then((data) => {
         setSuburbs(data);
@@ -525,6 +658,41 @@ function RankingsPage({ onSuburbClick }: { onSuburbClick: (suburb: string, postc
           </select>
         </div>
         <div style={{ flex: 1 }} />
+
+        {selectedForCompare.size > 0 && (
+          <button
+            onClick={onCompare}
+            style={{
+              padding: "8px 16px",
+              background: "#8b5cf6",
+              border: "none",
+              borderRadius: "6px",
+              color: "#fff",
+              cursor: "pointer",
+              fontSize: "13px",
+              fontWeight: "500",
+            }}
+          >
+            Compare ({selectedForCompare.size})
+          </button>
+        )}
+
+        <button
+          onClick={() => exportToCSV(filteredSuburbs, 'suburb-rankings.csv')}
+          style={{
+            padding: "8px 16px",
+            background: "#1e293b",
+            border: "1px solid #334155",
+            borderRadius: "6px",
+            color: "#94a3b8",
+            cursor: "pointer",
+            fontSize: "13px",
+            fontWeight: "500",
+          }}
+        >
+          Export CSV
+        </button>
+
         <div style={{ fontSize: "13px", color: "#64748b" }}>
           {filteredSuburbs.length} suburbs
         </div>
@@ -534,63 +702,100 @@ function RankingsPage({ onSuburbClick }: { onSuburbClick: (suburb: string, postc
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
           <thead>
             <tr>
+              <th style={{ width: "40px", padding: "12px", background: "#111827", borderBottom: "1px solid #1e293b", position: "sticky", top: 0, zIndex: 10, color: "#64748b" }}></th>
               <th style={{ width: "40px", padding: "12px", background: "#111827", borderBottom: "1px solid #1e293b", position: "sticky", top: 0, zIndex: 10, color: "#64748b" }}>#</th>
               <SortHeader col="suburb" label="Suburb" align="left" />
+              <SortHeader col="momentum_score" label="Momentum" />
               <SortHeader col="median_price" label="Median" />
               <SortHeader col="growth_1yr" label="Growth" />
               <SortHeader col="sales_count" label="Sales" />
               <SortHeader col="avg_price_per_sqm" label="$/m²" />
-              <SortHeader col="total_value" label="Total Value" />
             </tr>
           </thead>
           <tbody>
-            {filteredSuburbs.map((suburb, idx) => (
-              <tr
-                key={`${suburb.suburb}-${suburb.postcode}`}
-                onClick={() => onSuburbClick(suburb.suburb, suburb.postcode)}
-                style={{
-                  cursor: "pointer",
-                  background: idx % 2 === 0 ? "#0f172a" : "#111827",
-                }}
-                onMouseOver={(e) => (e.currentTarget.style.background = "#1e3a5f")}
-                onMouseOut={(e) => (e.currentTarget.style.background = idx % 2 === 0 ? "#0f172a" : "#111827")}
-              >
-                <td style={{ padding: "12px", textAlign: "center", color: "#64748b", borderBottom: "1px solid #1e293b" }}>
-                  {idx + 1}
-                </td>
-                <td style={{ padding: "12px 16px", borderBottom: "1px solid #1e293b" }}>
-                  <div style={{ fontWeight: "600", color: "#f8fafc" }}>{suburb.suburb}</div>
-                  <div style={{ fontSize: "11px", color: "#64748b" }}>{suburb.postcode}</div>
-                </td>
-                <td style={{
-                  padding: "12px 16px", textAlign: "right", fontWeight: "600",
-                  color: "#94a3b8",
-                  borderBottom: "1px solid #1e293b",
-                }}>
-                  {formatPrice(suburb.median_price)}
-                </td>
-                <td style={{
-                  padding: "12px 16px", textAlign: "right", fontWeight: "600",
-                  color: getGrowthColor(suburb.growth_1yr),
-                  borderBottom: "1px solid #1e293b",
-                }}>
-                  {suburb.growth_1yr > 0 ? "+" : ""}{suburb.growth_1yr.toFixed(1)}%
-                </td>
-                <td style={{ padding: "12px 16px", textAlign: "right", color: "#94a3b8", borderBottom: "1px solid #1e293b" }}>
-                  {suburb.sales_count}
-                </td>
-                <td style={{
-                  padding: "12px 16px", textAlign: "right", fontWeight: "600",
-                  color: suburb.avg_price_per_sqm ? getPriceColor(suburb.avg_price_per_sqm, sqmRange.min, sqmRange.max) : "#64748b",
-                  borderBottom: "1px solid #1e293b",
-                }}>
-                  {suburb.avg_price_per_sqm ? `$${suburb.avg_price_per_sqm.toLocaleString()}` : "-"}
-                </td>
-                <td style={{ padding: "12px 16px", textAlign: "right", color: "#64748b", borderBottom: "1px solid #1e293b" }}>
-                  {formatPrice(suburb.total_value)}
-                </td>
-              </tr>
-            ))}
+            {filteredSuburbs.map((suburb, idx) => {
+              const key = `${suburb.suburb}-${suburb.postcode}`;
+              const isSelected = selectedForCompare.has(key);
+              return (
+                <tr
+                  key={key}
+                  style={{
+                    cursor: "pointer",
+                    background: isSelected ? "#1e3a5f" : (idx % 2 === 0 ? "#0f172a" : "#111827"),
+                  }}
+                  onMouseOver={(e) => { if (!isSelected) e.currentTarget.style.background = "#1e3a5f"; }}
+                  onMouseOut={(e) => { if (!isSelected) e.currentTarget.style.background = idx % 2 === 0 ? "#0f172a" : "#111827"; }}
+                >
+                  <td style={{ padding: "12px", textAlign: "center", borderBottom: "1px solid #1e293b" }}>
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={(e) => {
+                        e.stopPropagation();
+                        onToggleCompare(key);
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      style={{ accentColor: "#8b5cf6", cursor: "pointer" }}
+                    />
+                  </td>
+                  <td
+                    style={{ padding: "12px", textAlign: "center", color: "#64748b", borderBottom: "1px solid #1e293b" }}
+                    onClick={() => onSuburbClick(suburb.suburb, suburb.postcode)}
+                  >
+                    {idx + 1}
+                  </td>
+                  <td
+                    style={{ padding: "12px 16px", borderBottom: "1px solid #1e293b" }}
+                    onClick={() => onSuburbClick(suburb.suburb, suburb.postcode)}
+                  >
+                    <div style={{ fontWeight: "600", color: "#f8fafc" }}>{suburb.suburb}</div>
+                    <div style={{ fontSize: "11px", color: "#64748b" }}>{suburb.postcode}</div>
+                  </td>
+                  <td
+                    style={{ padding: "12px 16px", textAlign: "right", borderBottom: "1px solid #1e293b" }}
+                    onClick={() => onSuburbClick(suburb.suburb, suburb.postcode)}
+                  >
+                    {suburb.momentum_score !== null ? (
+                      <span style={{
+                        display: "inline-block",
+                        padding: "4px 8px",
+                        borderRadius: "4px",
+                        background: getMomentumColor(suburb.momentum_score) + "20",
+                        color: getMomentumColor(suburb.momentum_score),
+                        fontWeight: "700",
+                        fontSize: "12px",
+                      }}>
+                        {suburb.momentum_score}
+                      </span>
+                    ) : "-"}
+                  </td>
+                  <td
+                    style={{ padding: "12px 16px", textAlign: "right", fontWeight: "600", color: "#94a3b8", borderBottom: "1px solid #1e293b" }}
+                    onClick={() => onSuburbClick(suburb.suburb, suburb.postcode)}
+                  >
+                    {formatPrice(suburb.median_price)}
+                  </td>
+                  <td
+                    style={{ padding: "12px 16px", textAlign: "right", fontWeight: "600", color: getGrowthColor(suburb.growth_1yr), borderBottom: "1px solid #1e293b" }}
+                    onClick={() => onSuburbClick(suburb.suburb, suburb.postcode)}
+                  >
+                    {suburb.growth_1yr > 0 ? "+" : ""}{suburb.growth_1yr.toFixed(1)}%
+                  </td>
+                  <td
+                    style={{ padding: "12px 16px", textAlign: "right", color: "#94a3b8", borderBottom: "1px solid #1e293b" }}
+                    onClick={() => onSuburbClick(suburb.suburb, suburb.postcode)}
+                  >
+                    {suburb.sales_count}
+                  </td>
+                  <td
+                    style={{ padding: "12px 16px", textAlign: "right", fontWeight: "600", color: suburb.avg_price_per_sqm ? getPriceColor(suburb.avg_price_per_sqm, sqmRange.min, sqmRange.max) : "#64748b", borderBottom: "1px solid #1e293b" }}
+                    onClick={() => onSuburbClick(suburb.suburb, suburb.postcode)}
+                  >
+                    {suburb.avg_price_per_sqm ? `$${suburb.avg_price_per_sqm.toLocaleString()}` : "-"}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -936,10 +1141,167 @@ function OutliersPage() {
   );
 }
 
+// Compare Page
+function ComparePage({
+  suburbKeys,
+  onBack,
+  onRemove,
+}: {
+  suburbKeys: string[];
+  onBack: () => void;
+  onRemove: (key: string) => void;
+}) {
+  const [suburbs, setSuburbs] = useState<SuburbStats[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (suburbKeys.length === 0) {
+      setSuburbs([]);
+      setLoading(false);
+      return;
+    }
+
+    fetch(`/api/suburbs?limit=3000`)
+      .then((r) => r.json())
+      .then((allSuburbs: SuburbStats[]) => {
+        const selected = allSuburbs.filter((s) =>
+          suburbKeys.includes(`${s.suburb}-${s.postcode}`)
+        );
+        setSuburbs(selected);
+        setLoading(false);
+      });
+  }, [suburbKeys]);
+
+  if (loading) {
+    return <div style={{ padding: "40px", textAlign: "center", color: "#64748b" }}>Loading comparison...</div>;
+  }
+
+  if (suburbs.length === 0) {
+    return (
+      <div style={{ padding: "40px", textAlign: "center" }}>
+        <div style={{ color: "#64748b", marginBottom: "16px" }}>No suburbs selected for comparison</div>
+        <button onClick={onBack} style={{ padding: "8px 16px", background: "#3b82f6", border: "none", borderRadius: "6px", color: "#fff", cursor: "pointer" }}>
+          Back to Rankings
+        </button>
+      </div>
+    );
+  }
+
+  const metrics = [
+    { key: 'momentum_score', label: 'Momentum Score', format: (v: number | null) => v !== null ? v.toString() : '-', color: (v: number | null) => getMomentumColor(v), higherBetter: true },
+    { key: 'median_price', label: 'Median Price', format: formatPrice, color: () => '#94a3b8', higherBetter: false },
+    { key: 'growth_1yr', label: '1yr Growth', format: (v: number) => `${v > 0 ? '+' : ''}${v.toFixed(1)}%`, color: getGrowthColor, higherBetter: true },
+    { key: 'sales_count', label: 'Sales Count', format: (v: number) => v.toLocaleString(), color: () => '#94a3b8', higherBetter: true },
+    { key: 'avg_price_per_sqm', label: 'Avg $/m²', format: (v: number | null) => v ? `$${v.toLocaleString()}` : '-', color: () => '#94a3b8', higherBetter: false },
+    { key: 'min_price', label: 'Min Price', format: formatPrice, color: () => '#22c55e', higherBetter: false },
+    { key: 'max_price', label: 'Max Price', format: formatPrice, color: () => '#ef4444', higherBetter: false },
+    { key: 'total_value', label: 'Total Value', format: formatPrice, color: () => '#8b5cf6', higherBetter: true },
+  ];
+
+  const getBestValue = (metricKey: string, higherBetter: boolean) => {
+    const values = suburbs.map((s) => (s as any)[metricKey]).filter((v) => v !== null && v !== undefined);
+    if (values.length === 0) return null;
+    return higherBetter ? Math.max(...values) : Math.min(...values);
+  };
+
+  return (
+    <div style={{ display: "flex", flex: 1, minHeight: 0, flexDirection: "column" }}>
+      <div style={{
+        display: "flex", gap: "16px", padding: "16px 24px",
+        background: "#111827", borderBottom: "1px solid #1e293b", alignItems: "center",
+      }}>
+        <button
+          onClick={onBack}
+          style={{
+            padding: "6px 12px",
+            background: "#1e293b",
+            border: "1px solid #334155",
+            borderRadius: "4px",
+            color: "#94a3b8",
+            cursor: "pointer",
+            fontSize: "12px",
+          }}
+        >
+          ← Back to Rankings
+        </button>
+        <div style={{ flex: 1 }} />
+        <div style={{ fontSize: "14px", color: "#f8fafc", fontWeight: "600" }}>
+          Comparing {suburbs.length} Suburbs
+        </div>
+      </div>
+
+      <div style={{ flex: 1, overflowY: "auto", padding: "24px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: `200px repeat(${suburbs.length}, 1fr)`, gap: "1px", background: "#1e293b", borderRadius: "8px", overflow: "hidden" }}>
+          {/* Header Row */}
+          <div style={{ background: "#111827", padding: "16px", fontWeight: "600", color: "#64748b", fontSize: "11px", textTransform: "uppercase" }}>
+            Metric
+          </div>
+          {suburbs.map((s) => (
+            <div key={`${s.suburb}-${s.postcode}`} style={{ background: "#111827", padding: "16px", textAlign: "center" }}>
+              <div style={{ fontWeight: "700", color: "#f8fafc", fontSize: "14px" }}>{s.suburb}</div>
+              <div style={{ fontSize: "11px", color: "#64748b" }}>{s.postcode}</div>
+              <button
+                onClick={() => onRemove(`${s.suburb}-${s.postcode}`)}
+                style={{
+                  marginTop: "8px",
+                  padding: "4px 8px",
+                  background: "#ef4444",
+                  border: "none",
+                  borderRadius: "4px",
+                  color: "#fff",
+                  cursor: "pointer",
+                  fontSize: "10px",
+                }}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+
+          {/* Metric Rows */}
+          {metrics.map((metric, idx) => {
+            const bestValue = getBestValue(metric.key, metric.higherBetter);
+            return (
+              <React.Fragment key={metric.key}>
+                <div style={{ background: idx % 2 === 0 ? "#0f172a" : "#111827", padding: "16px", color: "#94a3b8", fontSize: "13px", fontWeight: "500" }}>
+                  {metric.label}
+                </div>
+                {suburbs.map((s) => {
+                  const value = (s as any)[metric.key];
+                  const isBest = value !== null && value !== undefined && value === bestValue;
+                  return (
+                    <div
+                      key={`${s.suburb}-${s.postcode}-${metric.key}`}
+                      style={{
+                        background: idx % 2 === 0 ? "#0f172a" : "#111827",
+                        padding: "16px",
+                        textAlign: "center",
+                        fontWeight: "600",
+                        fontSize: "14px",
+                        color: metric.color(value),
+                        border: isBest ? "2px solid #22c55e" : "none",
+                        borderRadius: isBest ? "4px" : "0",
+                      }}
+                    >
+                      {metric.format(value)}
+                      {isBest && <span style={{ marginLeft: "4px", color: "#22c55e" }}>★</span>}
+                    </div>
+                  );
+                })}
+              </React.Fragment>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Main App
 function App() {
   const [page, setPage] = useState("rankings");
   const [selectedSuburb, setSelectedSuburb] = useState<{ suburb: string; postcode: string } | null>(null);
+  const [selectedForCompare, setSelectedForCompare] = useState<Set<string>>(new Set());
 
   const handleSuburbClick = (suburb: string, postcode: string) => {
     setSelectedSuburb({ suburb, postcode });
@@ -949,6 +1311,32 @@ function App() {
   const handleBack = () => {
     setSelectedSuburb(null);
     setPage("rankings");
+  };
+
+  const handleToggleCompare = (key: string) => {
+    setSelectedForCompare((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(key)) {
+        newSet.delete(key);
+      } else if (newSet.size < 5) {
+        newSet.add(key);
+      }
+      return newSet;
+    });
+  };
+
+  const handleCompare = () => {
+    if (selectedForCompare.size >= 2) {
+      setPage("compare");
+    }
+  };
+
+  const handleRemoveFromCompare = (key: string) => {
+    setSelectedForCompare((prev) => {
+      const newSet = new Set(prev);
+      newSet.delete(key);
+      return newSet;
+    });
   };
 
   return (
@@ -983,7 +1371,15 @@ function App() {
               NSW Property Intel
             </h1>
             <p style={{ fontSize: "11px", color: "#64748b", margin: 0 }}>
-              Suburb analytics for investors
+              Data from{" "}
+              <a
+                href="https://valuation.property.nsw.gov.au/embed/propertySalesInformation"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: "#3b82f6", textDecoration: "none" }}
+              >
+                NSW Valuer General
+              </a>
             </p>
           </div>
         </div>
@@ -996,8 +1392,22 @@ function App() {
       </header>
 
       {page === "map" && <MapPage onSuburbClick={handleSuburbClick} />}
-      {page === "rankings" && <RankingsPage onSuburbClick={handleSuburbClick} />}
+      {page === "rankings" && (
+        <RankingsPage
+          onSuburbClick={handleSuburbClick}
+          onCompare={handleCompare}
+          selectedForCompare={selectedForCompare}
+          onToggleCompare={handleToggleCompare}
+        />
+      )}
       {page === "outliers" && <OutliersPage />}
+      {page === "compare" && (
+        <ComparePage
+          suburbKeys={Array.from(selectedForCompare)}
+          onBack={() => setPage("rankings")}
+          onRemove={handleRemoveFromCompare}
+        />
+      )}
       {page === "detail" && selectedSuburb && (
         <SuburbDetailPage
           suburb={selectedSuburb.suburb}

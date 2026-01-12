@@ -1,7 +1,7 @@
 import { initDB, insertSales, calculateSuburbStats, getSalesCount } from "./db";
 
 // Parse DAT file format
-function parseDATContent(content: string, sourceFile: string) {
+function parseDATContent(content: string, sourceFile: string, yearFilter?: string) {
   const lines = content.trim().split("\n");
   const sales: any[] = [];
 
@@ -22,8 +22,12 @@ function parseDATContent(content: string, sourceFile: string) {
       const propertyType = parts[17];
       const propertyDesc = parts[18];
 
-      // Only include 2025 sales
-      if (purchasePrice > 0 && settlementDate && settlementDate.startsWith("2025")) {
+      // Filter by year if specified, otherwise include 2024 and 2025
+      const validYear = yearFilter
+        ? settlementDate?.startsWith(yearFilter)
+        : (settlementDate?.startsWith("2024") || settlementDate?.startsWith("2025"));
+
+      if (purchasePrice > 0 && settlementDate && validYear) {
         sales.push({
           id: `${parts[2]}-${parts[3]}-${settlementDate}-${sourceFile}`,
           propertyId: parts[2],
@@ -48,7 +52,7 @@ function parseDATContent(content: string, sourceFile: string) {
 }
 
 // Extract and import all data from ZIP
-async function importFromZip(zipPath: string) {
+async function importFromZip(zipPath: string, yearFilter?: string, skipRecalc = false) {
   console.log("Initializing database...");
   initDB();
 
@@ -58,7 +62,7 @@ async function importFromZip(zipPath: string) {
     return;
   }
 
-  console.log("Loading ZIP file...");
+  console.log(`Loading ZIP file... ${yearFilter ? `(filtering for ${yearFilter})` : ''}`);
   const JSZip = (await import("jszip")).default;
   const outerZip = await JSZip.loadAsync(await file.arrayBuffer());
 
@@ -77,13 +81,15 @@ async function importFromZip(zipPath: string) {
           if (datFilename.endsWith(".DAT") && !datEntry.dir) {
             try {
               const content = await datEntry.async("string");
-              const sales = parseDATContent(content, datFilename);
+              const sales = parseDATContent(content, datFilename, yearFilter);
 
               if (sales.length > 0) {
                 insertSales(sales);
                 totalSales += sales.length;
                 fileCount++;
-                console.log(`  Imported ${sales.length} sales from ${datFilename}`);
+                if (fileCount % 10 === 0) {
+                  console.log(`  Processed ${fileCount} files, ${totalSales} sales...`);
+                }
               }
             } catch (e) {
               console.error(`Error parsing ${datFilename}:`, e);
@@ -98,14 +104,19 @@ async function importFromZip(zipPath: string) {
 
   console.log(`\nImported ${totalSales} sales from ${fileCount} files`);
 
-  console.log("\nCalculating suburb statistics...");
-  calculateSuburbStats();
+  if (!skipRecalc) {
+    console.log("\nCalculating suburb statistics...");
+    calculateSuburbStats();
+  }
 
   const count = getSalesCount();
-  console.log(`\nDatabase ready with ${count} sales records`);
+  console.log(`\nDatabase now has ${count} total sales records`);
 }
 
 // Run import
 const zipPath = process.argv[2] || "./2025.zip";
-console.log(`Importing data from: ${zipPath}\n`);
-importFromZip(zipPath);
+const yearFilter = process.argv[3]; // Optional year filter
+const skipRecalc = process.argv[4] === "skip";
+
+console.log(`Importing data from: ${zipPath}${yearFilter ? ` (year: ${yearFilter})` : ''}\n`);
+importFromZip(zipPath, yearFilter, skipRecalc);

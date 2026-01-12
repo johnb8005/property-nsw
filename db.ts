@@ -99,11 +99,22 @@ export function insertSales(sales: any[]) {
 export function calculateSuburbStats() {
   db.run(`DELETE FROM suburb_stats`);
 
-  // Get all suburb/postcode combinations with 5+ sales
+  // Filter thresholds to exclude obvious data errors
+  const MAX_PRICE = 50000000; // $50M - anything above is likely a data error
+  const MIN_PRICE = 10000;    // $10K - anything below is likely a data error
+  const MAX_PRICE_PER_SQM = 50000; // $50K/m² - sanity check for residential
+  const MIN_LAND_AREA = 50;   // 50m² minimum - excludes units without land
+  const MAX_LAND_AREA = 5000; // 5,000m² max - typical residential block
+  // Only residential zones - RU zones have land_area in hectares, not m²
+  const RESIDENTIAL_ZONES = "('R1', 'R2', 'R3', 'R4', 'R5')";
+
+  // Get all suburb/postcode combinations with 5+ sales (excluding outliers)
   const suburbs = db.query(`
     SELECT suburb, postcode, COUNT(*) as cnt
     FROM sales
     WHERE settlement_date >= '20250101'
+      AND price >= ${MIN_PRICE}
+      AND price <= ${MAX_PRICE}
     GROUP BY suburb, postcode
     HAVING cnt >= 5
   `).all() as { suburb: string; postcode: string; cnt: number }[];
@@ -118,10 +129,11 @@ export function calculateSuburbStats() {
 
   const insertAll = db.transaction(() => {
     for (const { suburb, postcode } of suburbs) {
-      // Get current year prices
+      // Get current year prices (filtered)
       const prices = db.query(`
         SELECT price FROM sales
         WHERE suburb = ? AND postcode = ? AND settlement_date >= '20250101'
+          AND price >= ${MIN_PRICE} AND price <= ${MAX_PRICE}
         ORDER BY price
       `).all(suburb, postcode) as { price: number }[];
 
@@ -132,17 +144,31 @@ export function calculateSuburbStats() {
       const total = priceValues.reduce((a, b) => a + b, 0);
       const avg = Math.round(total / priceValues.length);
 
-      // Get avg price per sqm
-      const sqmResult = db.query(`
-        SELECT AVG(price / land_area) as avg_sqm
+      // Get median price per sqm for 2025 (residential zones only for accurate m² data)
+      const sqmPrices2025 = db.query(`
+        SELECT price / land_area as price_per_sqm
         FROM sales
-        WHERE suburb = ? AND postcode = ? AND settlement_date >= '20250101' AND land_area > 0
-      `).get(suburb, postcode) as { avg_sqm: number | null };
+        WHERE suburb = ? AND postcode = ? AND settlement_date >= '20250101'
+          AND zone_code IN ${RESIDENTIAL_ZONES}
+          AND land_area >= ${MIN_LAND_AREA} AND land_area <= ${MAX_LAND_AREA}
+          AND price >= ${MIN_PRICE} AND price <= ${MAX_PRICE}
+          AND (price / land_area) <= ${MAX_PRICE_PER_SQM}
+        ORDER BY price_per_sqm
+      `).all(suburb, postcode) as { price_per_sqm: number }[];
 
-      // Previous year stats (2024)
+      const medianSqm2025 = sqmPrices2025.length > 0
+        ? sqmPrices2025[Math.floor(sqmPrices2025.length / 2)].price_per_sqm
+        : null;
+
+      const avgSqm = sqmPrices2025.length > 0
+        ? sqmPrices2025.reduce((a, b) => a + b.price_per_sqm, 0) / sqmPrices2025.length
+        : null;
+
+      // Previous year stats (2024) - also filtered
       const prevPrices = db.query(`
         SELECT price FROM sales
         WHERE suburb = ? AND postcode = ? AND settlement_date >= '20240101' AND settlement_date < '20250101'
+          AND price >= ${MIN_PRICE} AND price <= ${MAX_PRICE}
         ORDER BY price
       `).all(suburb, postcode) as { price: number }[];
 
@@ -150,8 +176,26 @@ export function calculateSuburbStats() {
         ? prevPrices[Math.floor(prevPrices.length / 2)].price
         : null;
 
-      const growth = prevMedian && prevMedian > 0
-        ? Math.round((median - prevMedian) * 1000 / prevMedian) / 10
+      // Get median price per sqm for 2024 (same filters as 2025)
+      const sqmPrices2024 = db.query(`
+        SELECT price / land_area as price_per_sqm
+        FROM sales
+        WHERE suburb = ? AND postcode = ? AND settlement_date >= '20240101' AND settlement_date < '20250101'
+          AND zone_code IN ${RESIDENTIAL_ZONES}
+          AND land_area >= ${MIN_LAND_AREA} AND land_area <= ${MAX_LAND_AREA}
+          AND price >= ${MIN_PRICE} AND price <= ${MAX_PRICE}
+          AND (price / land_area) <= ${MAX_PRICE_PER_SQM}
+        ORDER BY price_per_sqm
+      `).all(suburb, postcode) as { price_per_sqm: number }[];
+
+      const medianSqm2024 = sqmPrices2024.length > 0
+        ? sqmPrices2024[Math.floor(sqmPrices2024.length / 2)].price_per_sqm
+        : null;
+
+      // Growth based on median $/m² - require at least 5 samples in each year for reliability
+      const growth = medianSqm2025 && medianSqm2024 && medianSqm2024 > 0
+        && sqmPrices2025.length >= 5 && sqmPrices2024.length >= 5
+        ? Math.round((medianSqm2025 - medianSqm2024) * 1000 / medianSqm2024) / 10
         : 0;
 
       insert.run(
@@ -163,7 +207,7 @@ export function calculateSuburbStats() {
         avg,
         Math.min(...priceValues),
         Math.max(...priceValues),
-        sqmResult.avg_sqm ? Math.round(sqmResult.avg_sqm) : null,
+        avgSqm ? Math.round(avgSqm) : null,
         prevPrices.length,
         prevMedian,
         growth
@@ -214,11 +258,12 @@ export function calculateSuburbStats() {
   }
 }
 
-// Get all sales
+// Get all sales (filtered to exclude obvious data errors)
 export function getAllSales() {
   return db.query(`
     SELECT * FROM sales
     WHERE settlement_date >= '20250101'
+      AND price >= 10000 AND price <= 50000000
     ORDER BY settlement_date DESC
   `).all();
 }
@@ -246,11 +291,12 @@ export function getSuburbDetail(suburb: string, postcode: string) {
   const recentSales = db.query(`
     SELECT * FROM sales
     WHERE UPPER(suburb) = UPPER(?) AND postcode = ?
+      AND price >= 10000 AND price <= 50000000
     ORDER BY settlement_date DESC
     LIMIT 50
   `).all(suburb, postcode);
 
-  // Get monthly price trend
+  // Get monthly price trend (filtered)
   const priceTrend = db.query(`
     SELECT
       SUBSTR(settlement_date, 1, 6) as month,
@@ -260,6 +306,7 @@ export function getSuburbDetail(suburb: string, postcode: string) {
       MAX(price) as max_price
     FROM sales
     WHERE UPPER(suburb) = UPPER(?) AND postcode = ?
+      AND price >= 10000 AND price <= 50000000
     GROUP BY SUBSTR(settlement_date, 1, 6)
     ORDER BY month
   `).all(suburb, postcode);
@@ -287,6 +334,7 @@ export function searchSuburbs(query: string) {
 // Get outliers - sales significantly above/below expected price per sqm
 export function getOutliers(threshold = 2.0, limit = 100) {
   // Get all sales with valid price_per_sqm grouped by postcode prefix (first 3 digits)
+  // Filter out obvious data errors first
   const sales = db.query(`
     SELECT
       id, address, suburb, postcode, price, land_area, price_per_sqm,
@@ -295,7 +343,9 @@ export function getOutliers(threshold = 2.0, limit = 100) {
     FROM sales
     WHERE price_per_sqm IS NOT NULL
       AND price_per_sqm > 0
-      AND land_area > 0
+      AND price_per_sqm < 100000
+      AND land_area > 10
+      AND price >= 10000 AND price <= 50000000
       AND settlement_date >= '20250101'
   `).all() as {
     id: string;
