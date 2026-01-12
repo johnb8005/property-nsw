@@ -24,6 +24,7 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-22.04
+    environment: GCP
     permissions:
       contents: read
       id-token: write
